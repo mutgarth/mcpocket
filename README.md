@@ -1,5 +1,8 @@
 # mcpocket
 
+[![CI](https://github.com/mutgarth/mcpocket/actions/workflows/ci.yml/badge.svg)](https://github.com/mutgarth/mcpocket/actions/workflows/ci.yml)
+[![Release](https://github.com/mutgarth/mcpocket/actions/workflows/release.yml/badge.svg)](https://github.com/mutgarth/mcpocket/actions/workflows/release.yml)
+
 `mcpocket` is a Rust MCP gateway. It gives AI clients one local MCP server named
 `mcpocket`, then routes tool calls to the upstream MCP servers configured in
 `~/.mcpocket/config.json`.
@@ -52,28 +55,27 @@ Not implemented yet:
     └── e2e_gateway.rs       # gateway e2e tests
 ```
 
-The legacy Node sync prototype is outside this Rust crate at
-`../mcpocket-sync`.
-
-## Install Locally
-
-Build a release binary:
+## Install
 
 ```bash
-cd /Users/lucasmeneses/mcpocket/mcpocket
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/mutgarth/mcpocket/main/scripts/install.sh | bash
 ```
 
-The binary will be:
+The installer downloads the latest GitHub Release for your platform and places
+`mcpocket` in `~/.local/bin`. It currently supports:
 
 ```text
-./target/release/mcpocket
+macOS arm64
+macOS x86_64
+Linux x86_64
 ```
 
-Make it available from any directory:
+Run the same command again to update to the latest release.
+
+To install somewhere else:
 
 ```bash
-ln -sf /Users/lucasmeneses/mcpocket/mcpocket/target/release/mcpocket ~/.local/bin/mcpocket
+MCPOCKET_INSTALL_DIR=/usr/local/bin bash -c "$(curl -fsSL https://raw.githubusercontent.com/mutgarth/mcpocket/main/scripts/install.sh)"
 ```
 
 Verify:
@@ -81,6 +83,20 @@ Verify:
 ```bash
 mcpocket --help
 mcpocket status
+```
+
+## Build From Source
+
+```bash
+git clone https://github.com/mutgarth/mcpocket.git
+cd mcpocket
+cargo build --release
+```
+
+The binary will be:
+
+```text
+./target/release/mcpocket
 ```
 
 ## Configure Upstreams
@@ -126,16 +142,6 @@ mcpocket deny-tool github__delete_repo
 
 The edit commands update `~/.mcpocket/config.json` and create a timestamped
 backup next to it before writing.
-
-For adding or importing upstreams, use the legacy sync CLI for now:
-
-```bash
-cd /Users/lucasmeneses/mcpocket/mcpocket-sync
-node bin/mcpocket.js import
-node bin/mcpocket.js list
-node bin/mcpocket.js add-http memory-module https://api.memorymodule.io/mcp
-node bin/mcpocket.js set-header memory-module x-api-key "YOUR_KEY"
-```
 
 ## Use The Gateway
 
@@ -287,6 +293,18 @@ cargo test --test e2e_gateway live_memory_module_is_reachable_through_gateway --
 
 The live test requires network access and a valid `memory-module` entry in
 `~/.mcpocket/config.json`.
+
+## Release Workflow
+
+Releases are built by GitHub Actions when a version tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow runs tests, builds macOS and Linux binaries, creates a
+GitHub Release, and uploads downloadable assets for the installer.
 
 ## Useful Debug Commands
 
