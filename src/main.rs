@@ -103,6 +103,12 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Launch the interactive terminal dashboard.
+    Tui {
+        /// Path to ~/.mcpocket/config.json.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -223,6 +229,10 @@ async fn main() -> anyhow::Result<()> {
             let config_path = config.unwrap_or_else(default_config_path);
             print_doctor(&config_path);
             Ok(())
+        }
+        Command::Tui { config } => {
+            let config_path = config.unwrap_or_else(default_config_path);
+            mcpocket::tui::run_tui(config_path).await
         }
     }
 }

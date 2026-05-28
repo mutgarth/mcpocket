@@ -51,10 +51,10 @@ pub async fn stream_socket(path: PathBuf, tx: mpsc::Sender<Event>) -> std::io::R
     };
     let mut lines = BufReader::new(stream).lines();
     while let Some(line) = lines.next_line().await? {
-        if let Ok(event) = serde_json::from_str::<Event>(&line) {
-            if tx.send(event).await.is_err() {
-                break;
-            }
+        if let Ok(event) = serde_json::from_str::<Event>(&line)
+            && tx.send(event).await.is_err()
+        {
+            break;
         }
     }
     Ok(())

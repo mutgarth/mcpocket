@@ -59,12 +59,11 @@ impl GatewayRouter {
             {
                 Ok(tools) => {
                     for tool in tools {
-                        if decide_tool(upstream.config(), &tool) == PolicyDecision::Allow {
-                            if let Some(rewritten) =
+                        if decide_tool(upstream.config(), &tool) == PolicyDecision::Allow
+                            && let Some(rewritten) =
                                 rewrite_tool_name(upstream.config().name.as_str(), tool)
-                            {
-                                exposed.push(rewritten);
-                            }
+                        {
+                            exposed.push(rewritten);
                         }
                     }
                 }
