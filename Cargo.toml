@@ -9,11 +9,13 @@ clap = { version = "4", features = ["derive"] }
 directories = "6"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+ratatui = "0.29"
+crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy = "0.10"
 thiserror = "2"
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 toml_edit = { version = "0.23", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
