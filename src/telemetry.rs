@@ -340,4 +340,31 @@ mod tests {
         let _ = std::fs::create_dir_all(&p);
         p
     }
+
+    #[tokio::test]
+    async fn raw_client_receives_tool_call_after_hello() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::net::UnixStream;
+
+        let dir = std::env::temp_dir().join(format!("mcpocket-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let bus = EventBus::new("e2e".to_owned());
+        let guard = spawn_socket_server(bus.clone(), dir.clone()).await.unwrap();
+
+        let stream = UnixStream::connect(guard.path()).await.unwrap();
+        let mut lines = BufReader::new(stream).lines();
+        let _hello = lines.next_line().await.unwrap().unwrap();
+
+        bus.emit(sample_call(99));
+        let line = lines.next_line().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Event>(&line).unwrap(),
+            sample_call(99)
+        );
+
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
