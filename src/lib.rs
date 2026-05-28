@@ -6,4 +6,5 @@ pub mod mcp;
 pub mod policy;
 pub mod router;
 pub mod telemetry;
+pub mod tui;
 pub mod upstream;
