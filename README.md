@@ -34,6 +34,7 @@ Implemented:
 - `list`, `enable`, `disable`, `allow-tool`, and `deny-tool` management commands
 - `tools` command for policy inspection
 - `doctor` command for local setup checks
+- `tui` interactive dashboard with live traffic monitor
 - gateway sync for Claude, Codex, and opencode
 - deterministic e2e test plus optional live Memory Module check
 
@@ -224,6 +225,29 @@ their MCP config:
 ```bash
 mcpocket serve --config ~/.mcpocket/config.json
 ```
+
+## Interactive Dashboard (TUI)
+
+Launch the terminal dashboard:
+
+```bash
+mcpocket tui
+```
+
+Tabs (switch with `Tab` / `Shift+Tab`):
+
+- **Servers** — upstream status and tool counts; `e`/`d` enable/disable the
+  selected server.
+- **Tools** — policy per server; `a`/`x` allow/deny the selected tool.
+- **Live** — real-time tool-call traffic across every running gateway, with
+  req/s, p95 latency, and error count.
+- **Doctor** — local setup checks.
+
+`r` refreshes, `q` (or `Esc`) quits.
+
+Live traffic is read from per-process sockets under `~/.mcpocket/run/`. Each
+`serve` process emits events without blocking tool calls; if no gateway is
+running, the Live tab simply waits.
 
 ## Tool Names
 
