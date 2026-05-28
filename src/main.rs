@@ -1,12 +1,3 @@
-mod client_sync;
-mod config;
-mod config_edit;
-mod doctor;
-mod mcp;
-mod policy;
-mod router;
-mod upstream;
-
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
@@ -14,14 +5,14 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use crate::client_sync::{GatewaySyncOptions, sync_gateway};
-use crate::config::{default_config_path, load_config};
-use crate::config_edit::{allow_tool, deny_tool, list_config, set_server_enabled};
-use crate::doctor::{CheckStatus, run_doctor};
-use crate::mcp::serve_stdio;
-use crate::policy::PolicyDecision;
-use crate::router::{GatewayRouter, ToolInspectServer};
-use crate::upstream::{StatusRow, UpstreamStatus};
+use mcpocket::client_sync::{GatewaySyncOptions, sync_gateway};
+use mcpocket::config::{default_config_path, load_config};
+use mcpocket::config_edit::{allow_tool, deny_tool, list_config, set_server_enabled};
+use mcpocket::doctor::{CheckStatus, run_doctor};
+use mcpocket::mcp::serve_stdio;
+use mcpocket::policy::PolicyDecision;
+use mcpocket::router::{GatewayRouter, ToolInspectServer};
+use mcpocket::upstream::{StatusRow, UpstreamStatus};
 
 #[derive(Debug, Parser)]
 #[command(name = "mcpocket")]
