@@ -8,10 +8,17 @@ use rmcp::{
     transport::stdio,
 };
 use serde_json::Value;
+use std::path::Path;
 
 use crate::router::GatewayRouter;
+use crate::telemetry::{EventBus, run_dir_for, spawn_socket_server};
 
-pub async fn serve_stdio(router: GatewayRouter) -> anyhow::Result<()> {
+pub async fn serve_stdio(router: GatewayRouter, config_path: &Path) -> anyhow::Result<()> {
+    let client = std::env::var("MCPOCKET_CLIENT").unwrap_or_else(|_| "unknown".to_owned());
+    let bus = EventBus::new(client);
+    let _socket = spawn_socket_server(bus.clone(), run_dir_for(config_path)).await?;
+    let router = router.with_event_bus(bus);
+
     let service = GatewayServer { router }.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

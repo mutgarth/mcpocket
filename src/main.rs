@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
             let config = load_config(&config_path)
                 .with_context(|| format!("failed to load {}", config_path.display()))?;
             let router = GatewayRouter::new(config)?;
-            serve_stdio(router).await
+            serve_stdio(router, &config_path).await
         }
         Command::Sync {
             gateway,

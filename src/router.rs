@@ -8,11 +8,13 @@ use tracing::{info, warn};
 
 use crate::config::{PocketConfig, exposed_name, split_exposed_name};
 use crate::policy::{PolicyDecision, PolicyReason, decide_tool, explain_tool};
+use crate::telemetry::{CallStatus, Event, EventBus, now_ms};
 use crate::upstream::{StatusRow, UpstreamHandle};
 
 #[derive(Clone)]
 pub struct GatewayRouter {
     upstreams: Arc<BTreeMap<String, Arc<UpstreamHandle>>>,
+    events: Option<EventBus>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +40,14 @@ impl GatewayRouter {
             .collect();
         Ok(Self {
             upstreams: Arc::new(upstreams),
+            events: None,
         })
+    }
+
+    /// Attach a telemetry bus so completed tool calls are broadcast.
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.events = Some(bus);
+        self
     }
 
     pub async fn list_tools(&self) -> Vec<Value> {
@@ -93,13 +102,29 @@ impl GatewayRouter {
         let started = Instant::now();
         let result = upstream.call_tool(upstream_tool, arguments).await;
         let status = if result.is_ok() { "ok" } else { "error" };
+        let duration_ms = started.elapsed().as_millis();
         info!(
             server = server_name,
             tool = exposed_tool,
-            duration_ms = started.elapsed().as_millis(),
+            duration_ms,
             status,
             "tool call finished"
         );
+        if let Some(bus) = &self.events {
+            bus.emit(Event::ToolCall {
+                ts: now_ms(),
+                pid: bus.pid(),
+                client: bus.client().to_owned(),
+                server: server_name.to_owned(),
+                tool: exposed_tool.to_owned(),
+                duration_ms: duration_ms as u64,
+                status: if result.is_ok() {
+                    CallStatus::Ok
+                } else {
+                    CallStatus::Error
+                },
+            });
+        }
         result
     }
 
