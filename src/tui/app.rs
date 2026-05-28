@@ -128,7 +128,7 @@ impl App {
         let count = self
             .live_events
             .iter()
-            .filter(|e| e.ts >= start && e.ts < now_ms)
+            .filter(|e| e.ts >= start && e.ts <= now_ms)
             .count();
         count as f64 / (window_ms as f64 / 1000.0)
     }

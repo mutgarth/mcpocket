@@ -28,8 +28,9 @@ use self::theme::Theme;
 
 /// Entry point for `mcpocket tui`.
 pub async fn run_tui(config_path: PathBuf) -> anyhow::Result<()> {
-    let mut terminal = setup_terminal().context("failed to enter TUI mode")?;
+    // Install the panic hook first so a panic during setup also restores the terminal.
     install_panic_hook();
+    let mut terminal = setup_terminal().context("failed to enter TUI mode")?;
 
     let mut app = App::new();
     let theme = Theme::detect();
@@ -71,7 +72,7 @@ pub async fn run_tui(config_path: PathBuf) -> anyhow::Result<()> {
         }
     };
 
-    restore_terminal(&mut terminal).ok();
+    restore_terminal(&mut terminal);
     result
 }
 
@@ -80,23 +81,41 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 fn setup_terminal() -> anyhow::Result<Tui> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
+    // If any later setup step fails, undo what we already enabled so the user's
+    // shell is never left in raw mode / the alternate screen.
+    if let Err(e) = execute!(
         stdout,
         terminal::EnterAlternateScreen,
         event::EnableMouseCapture
-    )?;
-    Ok(Terminal::new(CrosstermBackend::new(stdout))?)
+    ) {
+        let _ = terminal::disable_raw_mode();
+        return Err(e.into());
+    }
+    match Terminal::new(CrosstermBackend::new(stdout)) {
+        Ok(terminal) => Ok(terminal),
+        Err(e) => {
+            let _ = execute!(
+                io::stdout(),
+                terminal::LeaveAlternateScreen,
+                event::DisableMouseCapture
+            );
+            let _ = terminal::disable_raw_mode();
+            Err(e.into())
+        }
+    }
 }
 
-fn restore_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
-    terminal::disable_raw_mode()?;
-    execute!(
+/// Restore the terminal best-effort: every step runs even if an earlier one
+/// fails, so a `disable_raw_mode` error can never skip leaving the alternate
+/// screen or showing the cursor.
+fn restore_terminal(terminal: &mut Tui) {
+    let _ = terminal::disable_raw_mode();
+    let _ = execute!(
         terminal.backend_mut(),
         terminal::LeaveAlternateScreen,
         event::DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    Ok(())
+    );
+    let _ = terminal.show_cursor();
 }
 
 /// Restore the terminal even if a panic unwinds through the render loop.

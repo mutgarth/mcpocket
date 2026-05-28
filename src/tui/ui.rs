@@ -106,11 +106,37 @@ fn render_live(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
 
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    // Headline metrics computed from the retained feed.
+    let p95 = app
+        .p95_latency()
+        .map(|v| format!("{v}ms"))
+        .unwrap_or_else(|| "-".to_owned());
+    let rps = app.req_per_sec(crate::telemetry::now_ms(), 10_000);
+    let errors = app.error_count();
+    let error_color = if errors > 0 { theme.fail } else { theme.dim };
+    let stats = Line::from(vec![
+        Span::styled("p95 ", Style::default().fg(theme.dim)),
+        Span::styled(format!("{p95}   "), Style::default().fg(theme.fg)),
+        Span::styled("rate ", Style::default().fg(theme.dim)),
+        Span::styled(format!("{rps:.1} req/s   "), Style::default().fg(theme.fg)),
+        Span::styled("errors ", Style::default().fg(theme.dim)),
+        Span::styled(format!("{errors}"), Style::default().fg(error_color)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(stats).block(Block::default().borders(Borders::ALL).title(" Live ")),
+        chunks[0],
+    );
+
     let lines: Vec<Line> = app
         .live_events
         .iter()
         .rev()
-        .take(area.height.saturating_sub(2) as usize)
+        .take(chunks[1].height.saturating_sub(2) as usize)
         .map(|e| {
             let (label, color) = match e.status {
                 crate::telemetry::CallStatus::Ok => ("ok ", theme.ok),
@@ -128,8 +154,9 @@ fn render_live(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         })
         .collect();
 
-    let para = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Live "));
-    frame.render_widget(para, area);
+    let para =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Traffic "));
+    frame.render_widget(para, chunks[1]);
 }
 
 fn render_tools(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -274,6 +301,30 @@ mod tests {
         app.tab = Tab::Live;
         let text = buffer_text(&mut app);
         assert!(text.contains("no active gateways") || text.contains("Waiting"));
+    }
+
+    #[test]
+    fn live_tab_renders_metrics_with_traffic() {
+        use crate::telemetry::{CallStatus, Event};
+        let mut app = App::new();
+        app.tab = Tab::Live;
+        app.ingest(Event::ToolCall {
+            ts: 1,
+            pid: 1,
+            client: "claude".to_owned(),
+            server: "github".to_owned(),
+            tool: "github__search".to_owned(),
+            duration_ms: 42,
+            status: CallStatus::Ok,
+        });
+        let text = buffer_text(&mut app);
+        assert!(text.contains("p95"), "p95 metric should render");
+        assert!(text.contains("req/s"), "throughput metric should render");
+        assert!(text.contains("errors"), "error count should render");
+        assert!(
+            text.contains("github__search"),
+            "the event feed should render"
+        );
     }
 
     #[test]
