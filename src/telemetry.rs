@@ -122,6 +122,95 @@ impl EventBus {
     }
 }
 
+use std::path::{Path, PathBuf};
+
+use tokio::io::AsyncWriteExt;
+use tokio::net::UnixListener;
+
+/// The directory where serve processes place their sockets: sibling `run/` next
+/// to the config file's parent (i.e. `~/.mcpocket/run`).
+pub fn run_dir_for(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("run")
+}
+
+pub fn socket_file_name(pid: u32) -> String {
+    format!("serve-{pid}.sock")
+}
+
+/// Owns this serve process's socket file; removes it on drop (best-effort).
+pub struct SocketGuard {
+    path: PathBuf,
+}
+
+impl SocketGuard {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Create the run dir (0700 on unix), bind this process's socket, and spawn an
+/// accept loop. Each connection gets a `hello` frame, a replay of the ring, and
+/// then a live subscription. Returns a guard that unlinks the socket on drop.
+pub async fn spawn_socket_server(bus: EventBus, run_dir: PathBuf) -> anyhow::Result<SocketGuard> {
+    std::fs::create_dir_all(&run_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let path = run_dir.join(socket_file_name(bus.pid()));
+    let _ = std::fs::remove_file(&path); // clear a stale socket from a crashed run
+    let listener = UnixListener::bind(&path)?;
+
+    let accept_bus = bus.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _addr)) = listener.accept().await {
+            let conn_bus = accept_bus.clone();
+            tokio::spawn(async move {
+                let _ = serve_connection(stream, conn_bus).await;
+            });
+        }
+    });
+
+    Ok(SocketGuard { path })
+}
+
+async fn serve_connection(
+    mut stream: tokio::net::UnixStream,
+    bus: EventBus,
+) -> std::io::Result<()> {
+    // Subscribe BEFORE snapshotting so no event is lost in the gap.
+    let mut rx = bus.subscribe();
+    write_frame(&mut stream, &bus.hello()).await?;
+    for event in bus.snapshot() {
+        write_frame(&mut stream, &event).await?;
+    }
+    loop {
+        match rx.recv().await {
+            Ok(event) => write_frame(&mut stream, &event).await?,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    Ok(())
+}
+
+async fn write_frame(stream: &mut tokio::net::UnixStream, event: &Event) -> std::io::Result<()> {
+    let mut line = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
+    line.push('\n');
+    stream.write_all(line.as_bytes()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +289,55 @@ mod tests {
             duration_ms: 1,
             status: CallStatus::Ok,
         }
+    }
+
+    #[test]
+    fn run_dir_is_sibling_of_config() {
+        let cfg = std::path::Path::new("/home/u/.mcpocket/config.json");
+        assert_eq!(
+            run_dir_for(cfg),
+            std::path::Path::new("/home/u/.mcpocket/run")
+        );
+    }
+
+    #[test]
+    fn socket_file_name_includes_pid() {
+        assert_eq!(socket_file_name(4823), "serve-4823.sock");
+    }
+
+    #[tokio::test]
+    async fn server_sends_hello_then_replay_then_live() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::net::UnixStream;
+
+        let dir = tempdir_unique();
+        let bus = EventBus::new("test".to_owned());
+        bus.emit(sample_call(1)); // already in ring -> should be replayed
+
+        let guard = spawn_socket_server(bus.clone(), dir.clone()).await.unwrap();
+
+        let stream = UnixStream::connect(guard.path()).await.unwrap();
+        let mut lines = BufReader::new(stream).lines();
+
+        let hello: Event =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(hello, Event::Hello { .. }));
+
+        let replay: Event =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(replay, sample_call(1));
+
+        bus.emit(sample_call(2)); // live after connect
+        let live: Event = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(live, sample_call(2));
+
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn tempdir_unique() -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("mcpocket-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&p);
+        p
     }
 }
