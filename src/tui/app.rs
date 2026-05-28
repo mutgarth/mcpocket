@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use crate::doctor::DoctorCheck;
+use crate::router::ToolInspectServer;
 use crate::telemetry::{CallStatus, Event};
 use crate::upstream::StatusRow;
 
@@ -41,6 +43,8 @@ pub struct App {
     pub tab: Tab,
     pub selected: usize,
     pub servers: Vec<StatusRow>,
+    pub tools: Vec<ToolInspectServer>,
+    pub doctor: Vec<DoctorCheck>,
     pub live_events: VecDeque<LiveEvent>,
     pub status_message: Option<String>,
     pub should_quit: bool,
@@ -53,6 +57,8 @@ impl App {
             tab: Tab::Servers,
             selected: 0,
             servers: Vec::new(),
+            tools: Vec::new(),
+            doctor: Vec::new(),
             live_events: VecDeque::with_capacity(MAX_LIVE_EVENTS),
             status_message: None,
             should_quit: false,

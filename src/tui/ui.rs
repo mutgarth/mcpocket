@@ -22,9 +22,9 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
     render_tabs(frame, chunks[0], app, theme);
     match app.tab {
         Tab::Servers => render_servers(frame, chunks[1], app, theme),
-        Tab::Tools => render_placeholder(frame, chunks[1], "Tools", theme),
+        Tab::Tools => render_tools(frame, chunks[1], app, theme),
         Tab::Live => render_live(frame, chunks[1], app, theme),
-        Tab::Doctor => render_placeholder(frame, chunks[1], "Doctor", theme),
+        Tab::Doctor => render_doctor(frame, chunks[1], app, theme),
     }
     render_footer(frame, chunks[2], app, theme);
 }
@@ -132,15 +132,87 @@ fn render_live(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(para, area);
 }
 
-fn render_placeholder(frame: &mut Frame, area: Rect, title: &str, theme: &Theme) {
-    let para = Paragraph::new(format!("{title} — coming up"))
-        .style(Style::default().fg(theme.dim))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {title} ")),
-        );
-    frame.render_widget(para, area);
+fn render_tools(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    use crate::policy::PolicyDecision;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for server in &app.tools {
+        lines.push(Line::from(Span::styled(
+            format!("MCP {} ({})", server.name, server.transport),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )));
+        if let Some(err) = &server.error {
+            lines.push(Line::from(Span::styled(
+                format!("  FAIL {}", err.lines().next().unwrap_or(err)),
+                Style::default().fg(theme.fail),
+            )));
+            continue;
+        }
+        for tool in &server.tools {
+            let (label, color) = match tool.decision {
+                PolicyDecision::Allow => ("ALLOW", theme.ok),
+                PolicyDecision::Deny => ("HIDE ", theme.warn),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {label} "), Style::default().fg(color)),
+                Span::styled(tool.exposed_name.clone(), Style::default().fg(theme.fg)),
+                Span::raw("  "),
+                Span::styled(
+                    tool.reason.label().to_owned(),
+                    Style::default().fg(theme.dim),
+                ),
+            ]));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No tools loaded — press [r] to refresh.",
+            Style::default().fg(theme.dim),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Tools ")),
+        area,
+    );
+}
+
+fn render_doctor(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    use crate::doctor::CheckStatus;
+
+    let lines: Vec<Line> = app
+        .doctor
+        .iter()
+        .map(|check| {
+            let color = match check.status {
+                CheckStatus::Ok => theme.ok,
+                CheckStatus::Warn => theme.warn,
+                CheckStatus::Fail => theme.fail,
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<5} ", check.status.label()),
+                    Style::default().fg(color),
+                ),
+                Span::styled(
+                    format!("{:<22} ", check.name),
+                    Style::default().fg(theme.fg),
+                ),
+                Span::styled(check.detail.clone(), Style::default().fg(theme.dim)),
+            ])
+        })
+        .collect();
+    let body = if lines.is_empty() {
+        Paragraph::new("Running checks… press [r] to refresh.")
+            .style(Style::default().fg(theme.dim))
+    } else {
+        Paragraph::new(lines)
+    };
+    frame.render_widget(
+        body.block(Block::default().borders(Borders::ALL).title(" Doctor ")),
+        area,
+    );
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -202,5 +274,41 @@ mod tests {
         app.tab = Tab::Live;
         let text = buffer_text(&mut app);
         assert!(text.contains("no active gateways") || text.contains("Waiting"));
+    }
+
+    #[test]
+    fn tools_tab_shows_policy_rows() {
+        use crate::policy::{PolicyDecision, PolicyReason};
+        use crate::router::{ToolInspectRow, ToolInspectServer};
+        let mut app = App::new();
+        app.tab = Tab::Tools;
+        app.tools = vec![ToolInspectServer {
+            name: "github".to_owned(),
+            transport: "http",
+            tools: vec![ToolInspectRow {
+                exposed_name: "github__search".to_owned(),
+                decision: PolicyDecision::Allow,
+                reason: PolicyReason::Allowlist,
+            }],
+            error: None,
+        }];
+        let text = buffer_text(&mut app);
+        assert!(text.contains("github__search"));
+        assert!(text.contains("ALLOW"));
+    }
+
+    #[test]
+    fn doctor_tab_shows_checks() {
+        use crate::doctor::{CheckStatus, DoctorCheck};
+        let mut app = App::new();
+        app.tab = Tab::Doctor;
+        app.doctor = vec![DoctorCheck {
+            status: CheckStatus::Ok,
+            name: "PATH".to_owned(),
+            detail: "mcpocket on PATH".to_owned(),
+        }];
+        let text = buffer_text(&mut app);
+        assert!(text.contains("PATH"));
+        assert!(text.contains("OK"));
     }
 }
