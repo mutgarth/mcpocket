@@ -13,6 +13,7 @@ pub enum Action {
     Allow,
     Deny,
     Refresh,
+    ToggleExpand,
     None,
 }
 
@@ -30,6 +31,7 @@ pub fn map_key(code: KeyCode) -> Action {
         KeyCode::Char('a') => Action::Allow,
         KeyCode::Char('x') => Action::Deny,
         KeyCode::Char('r') => Action::Refresh,
+        KeyCode::Enter | KeyCode::Char(' ') => Action::ToggleExpand,
         _ => Action::None,
     }
 }
@@ -62,6 +64,8 @@ mod tests {
         assert_eq!(map_key(KeyCode::Char('a')), Action::Allow);
         assert_eq!(map_key(KeyCode::Char('x')), Action::Deny);
         assert_eq!(map_key(KeyCode::Char('r')), Action::Refresh);
+        assert_eq!(map_key(KeyCode::Enter), Action::ToggleExpand);
+        assert_eq!(map_key(KeyCode::Char(' ')), Action::ToggleExpand);
     }
 
     #[test]

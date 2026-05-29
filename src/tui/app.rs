@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
+use std::time::{Duration, Instant};
 
 use crate::doctor::DoctorCheck;
 use crate::router::ToolInspectServer;
@@ -7,6 +8,7 @@ use crate::upstream::StatusRow;
 
 /// Max tool-call events retained for the Live feed.
 pub const MAX_LIVE_EVENTS: usize = 500;
+pub const STATUS_MESSAGE_TTL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -44,9 +46,11 @@ pub struct App {
     pub selected: usize,
     pub servers: Vec<StatusRow>,
     pub tools: Vec<ToolInspectServer>,
+    pub tools_expanded: BTreeSet<String>,
     pub doctor: Vec<DoctorCheck>,
     pub live_events: VecDeque<LiveEvent>,
     pub status_message: Option<String>,
+    status_message_until: Option<Instant>,
     pub should_quit: bool,
     pub dirty: bool,
 }
@@ -58,12 +62,43 @@ impl App {
             selected: 0,
             servers: Vec::new(),
             tools: Vec::new(),
+            tools_expanded: BTreeSet::new(),
             doctor: Vec::new(),
             live_events: VecDeque::with_capacity(MAX_LIVE_EVENTS),
             status_message: None,
+            status_message_until: None,
             should_quit: false,
             dirty: true,
         }
+    }
+
+    pub fn set_status(&mut self, message: impl Into<String>) {
+        self.status_message = Some(message.into());
+        self.status_message_until = Some(Instant::now() + STATUS_MESSAGE_TTL);
+        self.dirty = true;
+    }
+
+    pub fn clear_expired_status(&mut self, now: Instant) {
+        if self.status_message.is_some()
+            && self
+                .status_message_until
+                .is_some_and(|deadline| now >= deadline)
+        {
+            self.status_message = None;
+            self.status_message_until = None;
+            self.dirty = true;
+        }
+    }
+
+    pub fn is_tools_expanded(&self, server: &str) -> bool {
+        self.tools_expanded.contains(server)
+    }
+
+    pub fn toggle_tools_expanded(&mut self, server: &str) {
+        if !self.tools_expanded.remove(server) {
+            self.tools_expanded.insert(server.to_owned());
+        }
+        self.dirty = true;
     }
 
     pub fn next_tab(&mut self) {
@@ -167,6 +202,20 @@ mod tests {
         assert_eq!(app.tab, Tab::Servers);
         app.prev_tab();
         assert_eq!(app.tab, Tab::Doctor); // wraps
+    }
+
+    #[test]
+    fn status_message_expires() {
+        let mut app = App::new();
+        app.dirty = false;
+        app.set_status("updated policy");
+        assert_eq!(app.status_message.as_deref(), Some("updated policy"));
+
+        app.dirty = false;
+        app.clear_expired_status(Instant::now() + STATUS_MESSAGE_TTL + Duration::from_millis(1));
+
+        assert_eq!(app.status_message, None);
+        assert!(app.dirty);
     }
 
     #[test]
