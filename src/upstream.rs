@@ -20,6 +20,7 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpstreamStatus {
+    Loading,
     Reachable,
     Unreachable,
     AuthMissing,
@@ -28,6 +29,7 @@ pub enum UpstreamStatus {
 impl std::fmt::Display for UpstreamStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            UpstreamStatus::Loading => write!(formatter, "loading"),
             UpstreamStatus::Reachable => write!(formatter, "reachable"),
             UpstreamStatus::Unreachable => write!(formatter, "unreachable"),
             UpstreamStatus::AuthMissing => write!(formatter, "auth-missing"),

@@ -234,6 +234,7 @@ fn render_servers(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
     let rows = app.servers.iter().enumerate().map(|(i, row)| {
         let (state, color) = match row.status {
+            UpstreamStatus::Loading => (loading_label("LOAD"), theme.accent),
             UpstreamStatus::Reachable => ("OK", theme.ok),
             UpstreamStatus::AuthMissing => ("AUTH", theme.warn),
             UpstreamStatus::Unreachable => ("FAIL", theme.fail),
@@ -252,7 +253,11 @@ fn render_servers(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Cell::from(row.name.clone()),
             Cell::from(row.transport),
             Cell::from(tools),
-            Cell::from(format!("{}ms", row.duration_ms)),
+            Cell::from(if row.status == UpstreamStatus::Loading {
+                "-".to_owned()
+            } else {
+                format!("{}ms", row.duration_ms)
+            }),
         ])
         .style(style)
     });
@@ -354,15 +359,24 @@ fn render_tools(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             selectable_style(theme, theme.accent, selected).add_modifier(Modifier::BOLD);
         let meta_style = selectable_style(theme, theme.dim, selected);
         let marker = if expanded { "[-]" } else { "[+]" };
+        let tool_count = if app.refreshing && server.tools.is_empty() && server.error.is_none() {
+            "loading".to_owned()
+        } else {
+            format!("{} tools", server.tools.len())
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("{marker} MCP {}", server.name), header_style),
-            Span::styled(
-                format!(" ({})  {} tools", server.transport, server.tools.len()),
-                meta_style,
-            ),
+            Span::styled(format!(" ({})  {tool_count}", server.transport), meta_style),
         ]));
         selectable_idx += 1;
         if !expanded {
+            continue;
+        }
+        if app.refreshing && server.tools.is_empty() && server.error.is_none() {
+            lines.push(Line::from(Span::styled(
+                format!("  {} loading tools...", loading_label("")),
+                Style::default().fg(theme.dim),
+            )));
             continue;
         }
         if let Some(err) = &server.error {
@@ -426,6 +440,20 @@ fn selectable_style(theme: &Theme, fg: ratatui::style::Color, selected: bool) ->
         style.bg(theme.selection)
     } else {
         style
+    }
+}
+
+fn loading_label(prefix: &'static str) -> &'static str {
+    const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
+    let index = ((crate::telemetry::now_ms() / 125) % FRAMES.len() as u64) as usize;
+    match prefix {
+        "" => FRAMES[index],
+        _ => match index {
+            0 => "LOAD |",
+            1 => "LOAD /",
+            2 => "LOAD -",
+            _ => "LOAD \\",
+        },
     }
 }
 

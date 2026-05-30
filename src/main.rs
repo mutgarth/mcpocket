@@ -306,6 +306,7 @@ fn print_status_rows(rows: &[&StatusRow]) {
     );
     for row in rows {
         let state = match row.status {
+            UpstreamStatus::Loading => style("LOAD", Style::Yellow),
             UpstreamStatus::Reachable => style("OK", Style::Green),
             UpstreamStatus::AuthMissing => style("AUTH", Style::Yellow),
             UpstreamStatus::Unreachable => style("FAIL", Style::Red),

@@ -128,53 +128,75 @@ impl GatewayRouter {
     }
 
     pub async fn status(&self) -> Vec<StatusRow> {
-        let mut rows = Vec::new();
-        for upstream in self.upstreams.values() {
-            rows.push(upstream.status().await);
+        let mut tasks = tokio::task::JoinSet::new();
+        for upstream in self.upstreams.values().cloned() {
+            tasks.spawn(async move { upstream.status().await });
         }
+
+        let mut rows = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(row) => rows.push(row),
+                Err(error) => warn!(error = ?error, "status task failed"),
+            }
+        }
+        rows.sort_by(|left, right| left.name.cmp(&right.name));
         rows
     }
 
     pub async fn inspect_tools(&self, filter: Option<&str>) -> Vec<ToolInspectServer> {
-        let mut rows = Vec::new();
+        let filter = filter.map(str::to_owned);
+        let mut tasks = tokio::task::JoinSet::new();
         for upstream in self.upstreams.values() {
-            if let Some(filter) = filter
+            if let Some(filter) = filter.as_deref()
                 && upstream.config().name != filter
             {
                 continue;
             }
 
-            match upstream.list_tools().await {
-                Ok(tools) => {
-                    let mut tool_rows = tools
-                        .iter()
-                        .filter_map(|tool| {
-                            let raw_name = tool.get("name")?.as_str()?.to_owned();
-                            let exposed_name = exposed_name(&upstream.config().name, &raw_name);
-                            let reason = explain_tool(upstream.config(), tool);
-                            Some(ToolInspectRow {
-                                exposed_name,
-                                decision: reason.decision(),
-                                reason,
+            let upstream = upstream.clone();
+            tasks.spawn(async move {
+                match upstream.list_tools().await {
+                    Ok(tools) => {
+                        let mut tool_rows = tools
+                            .iter()
+                            .filter_map(|tool| {
+                                let raw_name = tool.get("name")?.as_str()?.to_owned();
+                                let exposed_name = exposed_name(&upstream.config().name, &raw_name);
+                                let reason = explain_tool(upstream.config(), tool);
+                                Some(ToolInspectRow {
+                                    exposed_name,
+                                    decision: reason.decision(),
+                                    reason,
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>();
-                    tool_rows.sort_by(|left, right| left.exposed_name.cmp(&right.exposed_name));
-                    rows.push(ToolInspectServer {
+                            .collect::<Vec<_>>();
+                        tool_rows.sort_by(|left, right| left.exposed_name.cmp(&right.exposed_name));
+                        ToolInspectServer {
+                            name: upstream.config().name.clone(),
+                            transport: upstream.config().transport_name(),
+                            tools: tool_rows,
+                            error: None,
+                        }
+                    }
+                    Err(error) => ToolInspectServer {
                         name: upstream.config().name.clone(),
                         transport: upstream.config().transport_name(),
-                        tools: tool_rows,
-                        error: None,
-                    });
+                        tools: Vec::new(),
+                        error: Some(format!("{error:?}")),
+                    },
                 }
-                Err(error) => rows.push(ToolInspectServer {
-                    name: upstream.config().name.clone(),
-                    transport: upstream.config().transport_name(),
-                    tools: Vec::new(),
-                    error: Some(format!("{error:?}")),
-                }),
+            });
+        }
+
+        let mut rows = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(row) => rows.push(row),
+                Err(error) => warn!(error = ?error, "tool inspection task failed"),
             }
         }
+        rows.sort_by(|left, right| left.name.cmp(&right.name));
         rows
     }
 

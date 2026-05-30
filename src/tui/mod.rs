@@ -25,7 +25,7 @@ use crate::oauth::authenticate_http_server;
 use crate::policy::{PolicyDecision, PolicyReason};
 use crate::router::{GatewayRouter, ToolInspectServer};
 use crate::telemetry::{Event, run_dir_for};
-use crate::upstream::StatusRow;
+use crate::upstream::{StatusRow, UpstreamStatus};
 
 use self::app::{App, Tab, TextInputMode};
 use self::discovery::spawn_connection_manager;
@@ -62,7 +62,13 @@ pub async fn run_tui(config_path: PathBuf) -> anyhow::Result<()> {
     let (auth_tx, mut auth_rx) = mpsc::channel::<AuthEvent>(4);
     let (data_tx, mut data_rx) = mpsc::channel::<DataEvent>(4);
 
-    refresh_data(&mut app, &config_path).await;
+    match load_initial_data(&config_path) {
+        Ok(snapshot) => apply_data_snapshot(&mut app, snapshot),
+        Err(e) => app.set_status(e),
+    }
+    start_background_refresh(&mut app, config_path.clone(), data_tx.clone());
+    terminal.draw(|f| ui::render(f, &app, &theme))?;
+    app.dirty = false;
 
     let mut tick = tokio::time::interval(Duration::from_millis(125)); // ~8 fps
     let result = loop {
@@ -73,7 +79,13 @@ pub async fn run_tui(config_path: PathBuf) -> anyhow::Result<()> {
             maybe_key = key_rx.recv() => {
                 match maybe_key {
                     Some(key) => {
-                        handle_key(&mut app, key, &config_path, Some(auth_tx.clone())).await
+                        handle_key(
+                            &mut app,
+                            key,
+                            &config_path,
+                            Some(auth_tx.clone()),
+                            Some(data_tx.clone()),
+                        ).await
                     }
                     None => break Ok(()),
                 }
@@ -92,6 +104,9 @@ pub async fn run_tui(config_path: PathBuf) -> anyhow::Result<()> {
             }
             _ = tick.tick() => {
                 app.clear_expired_status(Instant::now());
+                if app.refreshing {
+                    app.dirty = true;
+                }
                 if app.dirty {
                     if let Err(e) = terminal.draw(|f| ui::render(f, &app, &theme)) {
                         break Err(anyhow::Error::from(e));
@@ -187,16 +202,18 @@ async fn handle_key(
     key: KeyCode,
     config_path: &Path,
     auth_tx: Option<mpsc::Sender<AuthEvent>>,
+    data_tx: Option<mpsc::Sender<DataEvent>>,
 ) {
     if app.is_text_input_open() {
         handle_text_input_key(app, key, config_path).await;
     } else {
-        handle_action_with_auth(app, map_key(key), config_path, auth_tx).await;
+        handle_action_with_auth(app, map_key(key), config_path, auth_tx, data_tx).await;
     }
 }
 
+#[cfg(test)]
 async fn handle_action(app: &mut App, action: Action, config_path: &Path) {
-    handle_action_with_auth(app, action, config_path, None).await;
+    handle_action_with_auth(app, action, config_path, None, None).await;
 }
 
 async fn handle_action_with_auth(
@@ -204,6 +221,7 @@ async fn handle_action_with_auth(
     action: Action,
     config_path: &Path,
     auth_tx: Option<mpsc::Sender<AuthEvent>>,
+    data_tx: Option<mpsc::Sender<DataEvent>>,
 ) {
     if app.is_server_profile_open() {
         handle_server_profile_action(app, action, config_path).await;
@@ -231,7 +249,13 @@ async fn handle_action_with_auth(
             app.selected = app.selected.saturating_sub(1);
             app.dirty = true;
         }
-        Action::Refresh => refresh_data(app, config_path).await,
+        Action::Refresh => {
+            if let Some(data_tx) = data_tx {
+                start_background_refresh(app, config_path.to_owned(), data_tx);
+            } else {
+                refresh_data(app, config_path).await;
+            }
+        }
         Action::Auth if app.tab == Tab::Servers => {
             if let Some(row) = app.servers.get(app.selected) {
                 let name = row.name.clone();
@@ -832,11 +856,19 @@ fn selected_tool_server(app: &App) -> Option<String> {
 
 /// Reload config and refresh status, tools, and doctor data.
 async fn refresh_data(app: &mut App, config_path: &Path) {
+    app.refreshing = true;
     match load_data(config_path).await {
         Ok(snapshot) => apply_data_snapshot(app, snapshot),
         Err(e) => app.set_status(e),
     }
+    app.refreshing = false;
     app.dirty = true;
+}
+
+fn start_background_refresh(app: &mut App, config_path: PathBuf, data_tx: mpsc::Sender<DataEvent>) {
+    app.refreshing = true;
+    app.dirty = true;
+    spawn_data_refresh(config_path, data_tx);
 }
 
 fn spawn_data_refresh(config_path: PathBuf, data_tx: mpsc::Sender<DataEvent>) {
@@ -844,6 +876,38 @@ fn spawn_data_refresh(config_path: PathBuf, data_tx: mpsc::Sender<DataEvent>) {
         let result = load_data(&config_path).await;
         let _ = data_tx.send(result).await;
     });
+}
+
+fn load_initial_data(config_path: &Path) -> DataEvent {
+    let doctor = run_doctor(config_path);
+    let server_profiles =
+        list_server_profiles(config_path).map_err(|e| format!("profile error: {e}"))?;
+    let config = load_config(config_path).map_err(|e| format!("config error: {e}"))?;
+    let mut servers = Vec::new();
+    let mut tools = Vec::new();
+    for server in config.active_gateway_servers() {
+        servers.push(StatusRow {
+            name: server.name.clone(),
+            transport: server.transport_name(),
+            status: UpstreamStatus::Loading,
+            duration_ms: 0,
+            exposed_tools: None,
+            upstream_tools: None,
+            details: server.redacted_details(),
+        });
+        tools.push(ToolInspectServer {
+            name: server.name.clone(),
+            transport: server.transport_name(),
+            tools: Vec::new(),
+            error: None,
+        });
+    }
+    Ok(DataSnapshot {
+        doctor,
+        server_profiles,
+        servers,
+        tools,
+    })
 }
 
 async fn load_data(config_path: &Path) -> DataEvent {
@@ -867,6 +931,8 @@ fn handle_data_event(app: &mut App, result: DataEvent) {
         Ok(snapshot) => apply_data_snapshot(app, snapshot),
         Err(e) => app.set_status(e),
     }
+    app.refreshing = false;
+    app.dirty = true;
 }
 
 fn apply_data_snapshot(app: &mut App, snapshot: DataSnapshot) {
