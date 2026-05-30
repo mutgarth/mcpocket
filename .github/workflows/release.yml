@@ -46,6 +46,8 @@ jobs:
           restore-keys: ${{ matrix.platform }}-cargo-
 
       - name: Run tests
+        env:
+          TMPDIR: /tmp
         run: cargo test --locked
 
       - name: Build release binary
