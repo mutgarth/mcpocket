@@ -11,6 +11,7 @@
 
 [![CI](https://github.com/mutgarth/mcpocket/actions/workflows/ci.yml/badge.svg)](https://github.com/mutgarth/mcpocket/actions/workflows/ci.yml)
 [![Release](https://github.com/mutgarth/mcpocket/actions/workflows/release.yml/badge.svg)](https://github.com/mutgarth/mcpocket/actions/workflows/release.yml)
+[![Version](https://img.shields.io/github/v/release/mutgarth/mcpocket?include_prereleases&label=version)](https://github.com/mutgarth/mcpocket/releases/latest)
 
 `mcpocket` is a Rust MCP gateway. It gives AI clients one local MCP server named
 `mcpocket`, then routes tool calls to the upstream MCP servers configured in
@@ -92,6 +93,7 @@ Verify:
 
 ```bash
 mcpocket --help
+mcpocket
 mcpocket status
 ```
 
@@ -140,6 +142,47 @@ Example:
 }
 ```
 
+For MCPs with multiple accounts or API keys, define named `profiles` and select
+one with `active_profile`. HTTP profiles can override `url` and `headers`;
+stdio profiles can override `command`, `args`, and `env`.
+
+```json
+{
+  "version": 1,
+  "servers": {
+    "memory-module": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://api.memorymodule.io/mcp",
+      "headers": {
+        "x-api-key": "default-key"
+      },
+      "active_profile": "work",
+      "profiles": {
+        "personal": {
+          "headers": {
+            "x-api-key": "personal-key"
+          }
+        },
+        "work": {
+          "headers": {
+            "x-api-key": "work-key"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+In the TUI Servers tab, press `Enter` on a server to manage profiles:
+
+- `Enter` selects the highlighted profile.
+- `n` creates a new profile.
+- `e` edits a field on the highlighted named profile.
+- Field edits use `field=value`, where `field` is `url`, `command`, `args`,
+  `header:<name>`, or `env:<name>`.
+
 You can manage existing upstreams with the Rust CLI:
 
 ```bash
@@ -154,6 +197,13 @@ The edit commands update `~/.mcpocket/config.json` and create a timestamped
 backup next to it before writing.
 
 ## Use The Gateway
+
+Launch the interactive terminal dashboard:
+
+```bash
+mcpocket
+mcpocket tui
+```
 
 List configured upstreams without contacting them:
 
@@ -179,8 +229,14 @@ OK     memory-module        http     5/11        430ms        https://api.memory
 
 Needs attention
 STATE  NAME                 TYPE     TOOLS       LATENCY      DETAILS
-FAIL   plane                http     -           5001ms       https://mcp.plane.so/http/mcp
+AUTH   plane                http     -           310ms        https://mcp.plane.so/http/mcp
 ```
+
+Remote HTTP MCPs that use OAuth can return `AUTH` when their bearer token is
+missing or expired. In the TUI Servers tab, select the server and press `o` to
+start the OAuth flow. mcpocket opens the browser, waits for the local callback,
+stores the returned bearer token in that server's `Authorization` header, and
+refreshes status.
 
 Inspect tools exposed or hidden by policy:
 
@@ -231,14 +287,18 @@ mcpocket serve --config ~/.mcpocket/config.json
 Launch the terminal dashboard:
 
 ```bash
+mcpocket
 mcpocket tui
 ```
 
 Tabs (switch with `Tab` / `Shift+Tab`):
 
 - **Servers** — upstream status and tool counts; `e`/`d` enable/disable the
-  selected server.
-- **Tools** — policy per server; `a`/`x` allow/deny the selected tool.
+  selected server, `o` re-authenticates an OAuth HTTP server. Press `Enter` on a
+  server to edit parameters and manage that server's tools; use `a`/`x` to
+  allow/deny a selected tool and `A` to allow every loaded tool for that MCP.
+- **Tools** — policy per server; `Enter` expands a server, `a`/`x` allow/deny
+  the selected tool, and `A` allows every loaded tool for the selected MCP.
 - **Live** — real-time tool-call traffic across every running gateway, with
   req/s, p95 latency, and error count.
 - **Doctor** — local setup checks.

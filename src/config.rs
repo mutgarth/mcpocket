@@ -22,6 +22,8 @@ pub struct RawServerConfig {
     pub enabled: bool,
     #[serde(default)]
     pub targets: BTreeMap<String, bool>,
+    pub active_profile: Option<String>,
+    pub profiles: Option<BTreeMap<String, RawServerProfile>>,
     pub transport: Option<String>,
     pub url: Option<String>,
     pub headers: Option<BTreeMap<String, String>>,
@@ -30,6 +32,15 @@ pub struct RawServerConfig {
     pub args: Vec<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub gateway: Option<RawGatewayConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawServerProfile {
+    pub url: Option<String>,
+    pub headers: Option<BTreeMap<String, String>>,
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -152,6 +163,7 @@ pub fn normalize_config(raw: RawPocketConfig) -> anyhow::Result<PocketConfig> {
     let mut servers = BTreeMap::new();
     for (name, raw_server) in raw.servers {
         validate_server_name(&name)?;
+        let raw_server = apply_active_profile(&name, raw_server)?;
         let transport_name = raw_server.transport.clone().unwrap_or_else(|| {
             if raw_server.url.is_some() {
                 "http".to_owned()
@@ -201,6 +213,50 @@ pub fn normalize_config(raw: RawPocketConfig) -> anyhow::Result<PocketConfig> {
         version: raw.version.unwrap_or(CURRENT_VERSION),
         servers,
     })
+}
+
+fn apply_active_profile(
+    server_name: &str,
+    mut raw_server: RawServerConfig,
+) -> anyhow::Result<RawServerConfig> {
+    let Some(active_profile) = raw_server.active_profile.clone() else {
+        return Ok(raw_server);
+    };
+    let Some(profile) = raw_server
+        .profiles
+        .as_ref()
+        .and_then(|profiles| profiles.get(&active_profile))
+    else {
+        anyhow::bail!(
+            "server \"{}\" active_profile \"{}\" does not exist",
+            server_name,
+            active_profile
+        );
+    };
+
+    if let Some(url) = &profile.url {
+        raw_server.url = Some(url.clone());
+    }
+    if let Some(headers) = &profile.headers {
+        raw_server
+            .headers
+            .get_or_insert_with(BTreeMap::new)
+            .extend(headers.clone());
+    }
+    if let Some(command) = &profile.command {
+        raw_server.command = Some(command.clone());
+    }
+    if let Some(args) = &profile.args {
+        raw_server.args = args.clone();
+    }
+    if let Some(env) = &profile.env {
+        raw_server
+            .env
+            .get_or_insert_with(BTreeMap::new)
+            .extend(env.clone());
+    }
+
+    Ok(raw_server)
 }
 
 pub fn exposed_name(server: &str, item: &str) -> String {
@@ -355,6 +411,80 @@ mod tests {
         .unwrap();
         let error = normalize_config(raw).unwrap_err().to_string();
         assert!(error.contains("cannot contain"));
+    }
+
+    #[test]
+    fn active_http_profile_overrides_headers() {
+        let raw: RawPocketConfig = serde_json::from_str(
+            r#"{
+              "servers": {
+                "memory": {
+                  "transport": "http",
+                  "url": "https://api.example/mcp",
+                  "headers": { "x-api-key": "base" },
+                  "active_profile": "work",
+                  "profiles": {
+                    "work": {
+                      "headers": { "x-api-key": "work-key", "x-account": "work" }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let config = normalize_config(raw).unwrap();
+        let crate::config::TransportConfig::Http { headers, .. } =
+            &config.servers["memory"].transport
+        else {
+            panic!("expected http transport");
+        };
+        assert_eq!(headers["x-api-key"], "work-key");
+        assert_eq!(headers["x-account"], "work");
+    }
+
+    #[test]
+    fn active_stdio_profile_overrides_env_and_args() {
+        let raw: RawPocketConfig = serde_json::from_str(
+            r#"{
+              "servers": {
+                "github": {
+                  "transport": "stdio",
+                  "command": "github-mcp",
+                  "args": ["--account", "base"],
+                  "env": { "GITHUB_TOKEN": "base" },
+                  "active_profile": "personal",
+                  "profiles": {
+                    "personal": {
+                      "args": ["--account", "personal"],
+                      "env": { "GITHUB_TOKEN": "personal-token" }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let config = normalize_config(raw).unwrap();
+        let crate::config::TransportConfig::Stdio { args, env, .. } =
+            &config.servers["github"].transport
+        else {
+            panic!("expected stdio transport");
+        };
+        assert_eq!(args, &["--account", "personal"]);
+        assert_eq!(env["GITHUB_TOKEN"], "personal-token");
+    }
+
+    #[test]
+    fn active_profile_must_exist() {
+        let raw: RawPocketConfig = serde_json::from_str(
+            r#"{"servers":{"github":{"command":"node","args":["server.js"],"active_profile":"missing","profiles":{}}}}"#,
+        )
+        .unwrap();
+        let error = normalize_config(raw).unwrap_err().to_string();
+        assert!(error.contains("active_profile"));
     }
 
     #[test]

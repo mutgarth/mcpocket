@@ -3,6 +3,7 @@ pub mod config;
 pub mod config_edit;
 pub mod doctor;
 pub mod mcp;
+pub mod oauth;
 pub mod policy;
 pub mod router;
 pub mod telemetry;

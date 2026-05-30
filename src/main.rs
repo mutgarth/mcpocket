@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Status { config: None }) {
+    match cli.command.unwrap_or(Command::Tui { config: None }) {
         Command::Serve { config } => {
             let config_path = config.unwrap_or_else(default_config_path);
             let config = load_config(&config_path)

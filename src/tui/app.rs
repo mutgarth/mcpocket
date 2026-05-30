@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use crate::config_edit::ServerProfileListRow;
 use crate::doctor::DoctorCheck;
 use crate::router::ToolInspectServer;
 use crate::telemetry::{CallStatus, Event};
@@ -41,15 +42,38 @@ pub struct LiveEvent {
     pub status: CallStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextInputMode {
+    NewServerProfile {
+        server: String,
+    },
+    EditServerParameter {
+        server: String,
+        profile: Option<String>,
+        field: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextInput {
+    pub mode: TextInputMode,
+    pub prompt: String,
+    pub value: String,
+}
+
 pub struct App {
     pub tab: Tab,
     pub selected: usize,
+    pub server_profile_server: Option<String>,
+    pub server_profile_return_selected: usize,
     pub servers: Vec<StatusRow>,
+    pub server_profiles: Vec<ServerProfileListRow>,
     pub tools: Vec<ToolInspectServer>,
     pub tools_expanded: BTreeSet<String>,
     pub doctor: Vec<DoctorCheck>,
     pub live_events: VecDeque<LiveEvent>,
     pub status_message: Option<String>,
+    pub text_input: Option<TextInput>,
     status_message_until: Option<Instant>,
     pub should_quit: bool,
     pub dirty: bool,
@@ -60,12 +84,16 @@ impl App {
         Self {
             tab: Tab::Servers,
             selected: 0,
+            server_profile_server: None,
+            server_profile_return_selected: 0,
             servers: Vec::new(),
+            server_profiles: Vec::new(),
             tools: Vec::new(),
             tools_expanded: BTreeSet::new(),
             doctor: Vec::new(),
             live_events: VecDeque::with_capacity(MAX_LIVE_EVENTS),
             status_message: None,
+            text_input: None,
             status_message_until: None,
             should_quit: false,
             dirty: true,
@@ -99,6 +127,63 @@ impl App {
             self.tools_expanded.insert(server.to_owned());
         }
         self.dirty = true;
+    }
+
+    pub fn is_server_profile_open(&self) -> bool {
+        self.server_profile_server.is_some()
+    }
+
+    pub fn open_server_profile(&mut self, server: String, selected_profile: usize) {
+        self.server_profile_server = Some(server);
+        self.server_profile_return_selected = self.selected;
+        self.selected = selected_profile;
+        self.dirty = true;
+    }
+
+    pub fn close_server_profile(&mut self) {
+        self.server_profile_server = None;
+        self.selected = self.server_profile_return_selected;
+        self.dirty = true;
+    }
+
+    pub fn open_text_input(
+        &mut self,
+        mode: TextInputMode,
+        prompt: impl Into<String>,
+        value: impl Into<String>,
+    ) {
+        self.text_input = Some(TextInput {
+            mode,
+            prompt: prompt.into(),
+            value: value.into(),
+        });
+        self.dirty = true;
+    }
+
+    pub fn close_text_input(&mut self) {
+        self.text_input = None;
+        self.dirty = true;
+    }
+
+    pub fn is_text_input_open(&self) -> bool {
+        self.text_input.is_some()
+    }
+
+    pub fn text_input_prefix_len(&self) -> usize {
+        let Some(input) = &self.text_input else {
+            return 0;
+        };
+        match &input.mode {
+            TextInputMode::NewServerProfile { .. } => 0,
+            TextInputMode::EditServerParameter { field, .. } => field.len() + 1,
+        }
+    }
+
+    pub fn text_input_value_len(&self) -> usize {
+        self.text_input
+            .as_ref()
+            .map(|input| input.value.len())
+            .unwrap_or(0)
     }
 
     pub fn next_tab(&mut self) {

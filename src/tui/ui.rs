@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs};
 
 use crate::tui::app::{App, Tab};
 use crate::tui::theme::Theme;
@@ -21,12 +21,16 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
 
     render_tabs(frame, chunks[0], app, theme);
     match app.tab {
+        Tab::Servers if app.is_server_profile_open() => {
+            render_server_profiles(frame, chunks[1], app, theme)
+        }
         Tab::Servers => render_servers(frame, chunks[1], app, theme),
         Tab::Tools => render_tools(frame, chunks[1], app, theme),
         Tab::Live => render_live(frame, chunks[1], app, theme),
         Tab::Doctor => render_doctor(frame, chunks[1], app, theme),
     }
     render_footer(frame, chunks[2], app, theme);
+    render_text_input_modal(frame, frame.area(), app, theme);
 }
 
 fn render_tabs(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -50,6 +54,175 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .add_modifier(Modifier::BOLD),
         );
     frame.render_widget(tabs, area);
+}
+
+fn render_server_profiles(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    use crate::policy::PolicyDecision;
+
+    let Some(server) = app.server_profile_server.as_deref() else {
+        render_servers(frame, area, app, theme);
+        return;
+    };
+    let Some(profile_row) = app.server_profiles.iter().find(|row| row.name == server) else {
+        let message = Paragraph::new("No profile data loaded. Press [r] to refresh.")
+            .style(Style::default().fg(theme.dim))
+            .block(Block::default().borders(Borders::ALL).title(" Profiles "));
+        frame.render_widget(message, area);
+        return;
+    };
+
+    let active = profile_row.active_profile.as_deref();
+    let mut lines = Vec::new();
+    let mut selectable_idx = 0usize;
+    let default_selected = app.selected == selectable_idx;
+    let default_active = active.is_none();
+    lines.push(Line::from(vec![
+        Span::styled(
+            if default_selected { "> " } else { "  " },
+            selectable_style(theme, theme.fg, default_selected),
+        ),
+        Span::styled(
+            if default_active { "* " } else { "  " },
+            selectable_style(theme, theme.ok, default_selected),
+        ),
+        Span::styled(
+            "default",
+            selectable_style(theme, theme.fg, default_selected),
+        ),
+        Span::styled(
+            "  base server parameters",
+            selectable_style(theme, theme.dim, default_selected),
+        ),
+    ]));
+    selectable_idx += 1;
+    for field in &profile_row.default_fields {
+        let selected = app.selected == selectable_idx;
+        lines.push(parameter_line(field, theme, selected));
+        selectable_idx += 1;
+    }
+
+    for profile in &profile_row.profiles {
+        let selected = app.selected == selectable_idx;
+        let active = active == Some(profile.as_str());
+        lines.push(Line::from(vec![
+            Span::styled(
+                if selected { "> " } else { "  " },
+                selectable_style(theme, theme.fg, selected),
+            ),
+            Span::styled(
+                if active { "* " } else { "  " },
+                selectable_style(theme, theme.ok, selected),
+            ),
+            Span::styled(profile.clone(), selectable_style(theme, theme.fg, selected)),
+        ]));
+        selectable_idx += 1;
+        for field in profile_row
+            .profile_fields
+            .get(profile)
+            .into_iter()
+            .flatten()
+        {
+            let selected = app.selected == selectable_idx;
+            lines.push(parameter_line(field, theme, selected));
+            selectable_idx += 1;
+        }
+    }
+
+    if profile_row.profiles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No alternate profiles configured for this MCP.",
+            Style::default().fg(theme.dim),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Tools",
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    match app.tools.iter().find(|row| row.name == server) {
+        Some(tool_server) if tool_server.error.is_some() => {
+            let err = tool_server
+                .error
+                .as_deref()
+                .unwrap_or("failed to load tools");
+            lines.push(Line::from(Span::styled(
+                format!("  FAIL {}", err.lines().next().unwrap_or(err)),
+                Style::default().fg(theme.fail),
+            )));
+        }
+        Some(tool_server) if tool_server.tools.is_empty() => {
+            lines.push(Line::from(Span::styled(
+                "  No tools loaded for this MCP.",
+                Style::default().fg(theme.dim),
+            )));
+        }
+        Some(tool_server) => {
+            for tool in &tool_server.tools {
+                let selected = app.selected == selectable_idx;
+                let (label, color) = match tool.decision {
+                    PolicyDecision::Allow => ("ALLOW", theme.ok),
+                    PolicyDecision::Deny => ("HIDE ", theme.warn),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        if selected { "> " } else { "  " },
+                        selectable_style(theme, theme.fg, selected),
+                    ),
+                    Span::styled(
+                        format!("{label} "),
+                        selectable_style(theme, color, selected),
+                    ),
+                    Span::styled(
+                        tool.exposed_name.clone(),
+                        selectable_style(theme, theme.fg, selected),
+                    ),
+                    Span::styled("  ", selectable_style(theme, theme.dim, selected)),
+                    Span::styled(
+                        tool.reason.label().to_owned(),
+                        selectable_style(theme, theme.dim, selected),
+                    ),
+                ]));
+                selectable_idx += 1;
+            }
+        }
+        None => {
+            lines.push(Line::from(Span::styled(
+                "  Tools have not been loaded yet. Press [r] to refresh.",
+                Style::default().fg(theme.dim),
+            )));
+        }
+    }
+
+    let visible_lines = area.height.saturating_sub(2) as usize;
+    let scroll = selection_scroll_offset(app.selected, visible_lines) as u16;
+    let title = format!(" Profiles: {server} ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .block(Block::default().borders(Borders::ALL).title(title)),
+        area,
+    );
+}
+
+fn parameter_line(
+    field: &crate::config_edit::ServerProfileFieldRow,
+    theme: &Theme,
+    selected: bool,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("     ", selectable_style(theme, theme.dim, selected)),
+        Span::styled(
+            format!("{:<18}", field.field),
+            selectable_style(theme, theme.dim, selected),
+        ),
+        Span::styled(
+            field.value.clone(),
+            selectable_style(theme, theme.dim, selected),
+        ),
+    ])
 }
 
 fn render_servers(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -294,11 +467,19 @@ fn render_doctor(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let hint = match app.tab {
-        Tab::Servers => "[Tab] switch  [j/k] move  [e]nable [d]isable  [r]efresh  [q]uit",
-        Tab::Tools => "[Tab] switch  [j/k] move  [Enter] expand  [a]llow [x]deny  [q]uit",
-        Tab::Live => "[Tab] switch  live traffic  [q]uit",
-        Tab::Doctor => "[Tab] switch  [r]efresh  [q]uit",
+    let hint = if app.is_server_profile_open() {
+        "[j/k] move  [Enter] select/edit  [a]llow [x]deny [A]allow all  [n]ew profile  [b/q] back"
+    } else {
+        match app.tab {
+            Tab::Servers => {
+                "[Tab] switch  [j/k] move  [e]nable [d]isable  [o]auth  [r]efresh  [q]uit"
+            }
+            Tab::Tools => {
+                "[Tab] switch  [j/k] move  [Enter] expand  [a]llow [x]deny [A]allow all  [q]uit"
+            }
+            Tab::Live => "[Tab] switch  live traffic  [q]uit",
+            Tab::Doctor => "[Tab] switch  [r]efresh  [q]uit",
+        }
     };
     let text = app
         .status_message
@@ -310,10 +491,96 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
 }
 
+fn render_text_input_modal(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let Some(input) = &app.text_input else {
+        return;
+    };
+
+    let modal = centered_rect(area, 76, 9);
+    let lines = vec![
+        Line::from(Span::styled(
+            input.prompt.clone(),
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            text_input_display_value(&input.value, modal.width.saturating_sub(2) as usize),
+            Style::default().fg(theme.fg),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Enter", Style::default().fg(theme.accent)),
+            Span::styled(" save   ", Style::default().fg(theme.dim)),
+            Span::styled("Esc", Style::default().fg(theme.accent)),
+            Span::styled(" cancel   ", Style::default().fg(theme.dim)),
+            Span::styled("Backspace", Style::default().fg(theme.accent)),
+            Span::styled(" edit", Style::default().fg(theme.dim)),
+        ]),
+    ];
+
+    frame.render_widget(Clear, modal);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.fg))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Edit MCP parameter ")
+                    .style(Style::default().bg(theme.bg).fg(theme.fg)),
+            ),
+        modal,
+    );
+}
+
+fn centered_rect(area: Rect, preferred_width: u16, preferred_height: u16) -> Rect {
+    let max_width = area.width.saturating_sub(2).max(1);
+    let max_height = area.height.saturating_sub(2).max(1);
+    let width = preferred_width.min(max_width);
+    let height = preferred_height.min(max_height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn text_input_display_value(value: &str, width: usize) -> String {
+    let cursor = "_";
+    if width == 0 {
+        return String::new();
+    }
+    if width <= cursor.len() {
+        return cursor[..width].to_owned();
+    }
+
+    let mut chars = value.chars().collect::<Vec<_>>();
+    let available = width - cursor.len();
+    if chars.len() <= available {
+        return format!("{value}{cursor}");
+    }
+
+    let marker = "...";
+    if available <= marker.len() {
+        return format!(
+            "{}{cursor}",
+            marker.chars().take(available).collect::<String>()
+        );
+    }
+    let tail_len = available.saturating_sub(marker.len());
+    let tail = chars.split_off(chars.len().saturating_sub(tail_len));
+    format!("{marker}{}{}", tail.into_iter().collect::<String>(), cursor)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::tui::app::{App, Tab};
+    use crate::config_edit::{ServerProfileFieldRow, ServerProfileListRow};
+    use crate::policy::{PolicyDecision, PolicyReason};
+    use crate::router::{ToolInspectRow, ToolInspectServer};
+    use crate::tui::app::{App, Tab, TextInputMode};
     use crate::tui::theme::Theme;
     use crate::upstream::{StatusRow, UpstreamStatus};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
@@ -389,6 +656,128 @@ mod tests {
 
         assert!(text.contains("server-08"));
         assert!(!text.contains("server-00"));
+    }
+
+    #[test]
+    fn server_profile_view_shows_profiles_and_active_marker() {
+        let mut app = App::new();
+        app.tab = Tab::Servers;
+        app.server_profile_server = Some("memory".to_owned());
+        app.selected = 2;
+        app.server_profiles = vec![ServerProfileListRow {
+            name: "memory".to_owned(),
+            active_profile: Some("work".to_owned()),
+            default_fields: vec![
+                ServerProfileFieldRow {
+                    field: "url".to_owned(),
+                    value: "https://example.test/mcp".to_owned(),
+                    raw_value: "https://example.test/mcp".to_owned(),
+                },
+                ServerProfileFieldRow {
+                    field: "header:x-api-key".to_owned(),
+                    value: "***".to_owned(),
+                    raw_value: "base-key".to_owned(),
+                },
+            ],
+            profiles: vec!["personal".to_owned(), "work".to_owned()],
+            profile_fields: BTreeMap::from([
+                (
+                    "personal".to_owned(),
+                    vec![ServerProfileFieldRow {
+                        field: "header:x-api-key".to_owned(),
+                        value: "***".to_owned(),
+                        raw_value: "personal-key".to_owned(),
+                    }],
+                ),
+                (
+                    "work".to_owned(),
+                    vec![ServerProfileFieldRow {
+                        field: "header:x-api-key".to_owned(),
+                        value: "***".to_owned(),
+                        raw_value: "work-key".to_owned(),
+                    }],
+                ),
+            ]),
+            profile_details: BTreeMap::from([
+                ("personal".to_owned(), "header:x-api-key=***".to_owned()),
+                ("work".to_owned(), "header:x-api-key=***".to_owned()),
+            ]),
+        }];
+        app.tools = vec![ToolInspectServer {
+            name: "memory".to_owned(),
+            transport: "http",
+            tools: vec![
+                ToolInspectRow {
+                    exposed_name: "memory__search".to_owned(),
+                    decision: PolicyDecision::Allow,
+                    reason: PolicyReason::Allowlist,
+                },
+                ToolInspectRow {
+                    exposed_name: "memory__delete".to_owned(),
+                    decision: PolicyDecision::Deny,
+                    reason: PolicyReason::Destructive,
+                },
+            ],
+            error: None,
+        }];
+
+        let theme = Theme::brand(false);
+        let buffer = render_buffer(&mut app);
+        let text = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(text.contains("Profiles: memory"));
+        assert!(text.contains("default"));
+        assert!(text.contains("personal"));
+        assert!(text.contains("* work"));
+        assert!(text.contains("https://example.test/mcp"));
+        assert!(text.contains("header:x-api-key"));
+        assert!(text.contains("***"));
+        assert!(text.contains("[Enter] select"));
+        assert!(text.contains("[n]ew profile"));
+        assert!(text.contains("Tools"));
+        assert!(text.contains("memory__search"));
+        assert!(text.contains("memory__delete"));
+        assert!(text.contains("ALLOW"));
+        assert!(text.contains("HIDE"));
+
+        let (field_x, field_y) = find_text_position(&buffer, "https://example.test/mcp").unwrap();
+        assert_ne!(buffer.cell((field_x, field_y)).unwrap().bg, theme.selection);
+    }
+
+    #[test]
+    fn text_input_modal_renders_bounded_edit_value() {
+        let mut app = App::new();
+        app.tab = Tab::Servers;
+        app.server_profile_server = Some("memory".to_owned());
+        let long_value = format!("header:x-api-key={}", "s".repeat(200));
+
+        app.open_text_input(
+            TextInputMode::EditServerParameter {
+                server: "memory".to_owned(),
+                profile: Some("work".to_owned()),
+                field: "header:x-api-key".to_owned(),
+            },
+            "edit value (Enter save, Esc cancel)",
+            long_value.clone(),
+        );
+
+        let text = buffer_text(&mut app);
+        assert!(text.contains("Edit MCP parameter"));
+        assert!(text.contains("..."));
+        assert!(text.contains("ssssssss_"));
+        assert!(!text.contains(&long_value));
+        assert!(text.contains("[j/k] move"));
+    }
+
+    #[test]
+    fn text_input_display_value_fits_available_width() {
+        assert_eq!(text_input_display_value("abc", 4), "abc_");
+        assert_eq!(text_input_display_value("abcdef", 5), "...f_");
+        assert_eq!(text_input_display_value("abcdef", 2), "._");
+        assert_eq!(text_input_display_value("abcdef", 0), "");
     }
 
     #[test]

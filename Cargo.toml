@@ -1,6 +1,6 @@
 [package]
 name = "mcpocket"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
@@ -8,7 +8,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest", "auth"] }
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }

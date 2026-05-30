@@ -12,8 +12,12 @@ pub enum Action {
     Disable,
     Allow,
     Deny,
+    Auth,
     Refresh,
     ToggleExpand,
+    AllowAll,
+    Back,
+    New,
     None,
 }
 
@@ -29,9 +33,13 @@ pub fn map_key(code: KeyCode) -> Action {
         KeyCode::Char('e') => Action::Enable,
         KeyCode::Char('d') => Action::Disable,
         KeyCode::Char('a') => Action::Allow,
+        KeyCode::Char('A') => Action::AllowAll,
         KeyCode::Char('x') => Action::Deny,
+        KeyCode::Char('o') => Action::Auth,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Enter | KeyCode::Char(' ') => Action::ToggleExpand,
+        KeyCode::Char('b') | KeyCode::Backspace => Action::Back,
+        KeyCode::Char('n') => Action::New,
         _ => Action::None,
     }
 }
@@ -62,10 +70,15 @@ mod tests {
         assert_eq!(map_key(KeyCode::Char('e')), Action::Enable);
         assert_eq!(map_key(KeyCode::Char('d')), Action::Disable);
         assert_eq!(map_key(KeyCode::Char('a')), Action::Allow);
+        assert_eq!(map_key(KeyCode::Char('A')), Action::AllowAll);
         assert_eq!(map_key(KeyCode::Char('x')), Action::Deny);
+        assert_eq!(map_key(KeyCode::Char('o')), Action::Auth);
         assert_eq!(map_key(KeyCode::Char('r')), Action::Refresh);
         assert_eq!(map_key(KeyCode::Enter), Action::ToggleExpand);
         assert_eq!(map_key(KeyCode::Char(' ')), Action::ToggleExpand);
+        assert_eq!(map_key(KeyCode::Char('b')), Action::Back);
+        assert_eq!(map_key(KeyCode::Backspace), Action::Back);
+        assert_eq!(map_key(KeyCode::Char('n')), Action::New);
     }
 
     #[test]

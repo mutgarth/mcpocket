@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, WWW_AUTHENTICATE};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -396,7 +396,12 @@ impl HttpClient {
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            anyhow::bail!("auth-missing: HTTP {status}");
+            let challenge = response
+                .headers()
+                .get(WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            anyhow::bail!("{}", http_auth_error(status, challenge.as_deref(), ""));
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -424,9 +429,14 @@ impl HttpClient {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_owned();
+        let challenge = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let body = response.text().await?;
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            anyhow::bail!("auth-missing: HTTP {status}");
+            anyhow::bail!("{}", http_auth_error(status, challenge.as_deref(), &body));
         }
         if !status.is_success() {
             anyhow::bail!("HTTP {status}: {}", truncate(&body));
@@ -494,6 +504,46 @@ fn is_auth_error(error: &anyhow::Error) -> bool {
     error.to_string().contains("auth-missing")
 }
 
+fn http_auth_error(
+    status: reqwest::StatusCode,
+    www_authenticate: Option<&str>,
+    body: &str,
+) -> String {
+    let mut parts = vec![format!("auth-missing: HTTP {status}")];
+    if let Some(challenge) = www_authenticate {
+        if let Some(description) = bearer_challenge_param(challenge, "error_description") {
+            parts.push(description);
+        }
+        if let Some(resource_metadata) = bearer_challenge_param(challenge, "resource_metadata") {
+            parts.push(format!("resource_metadata={resource_metadata}"));
+        }
+    }
+    if parts.len() == 1 && !body.trim().is_empty() {
+        parts.push(truncate(body.trim()));
+    }
+    parts.join(": ")
+}
+
+fn bearer_challenge_param(challenge: &str, key: &str) -> Option<String> {
+    challenge
+        .split(',')
+        .filter_map(|part| {
+            let part = part.trim().strip_prefix("Bearer ").unwrap_or(part.trim());
+            let (candidate, value) = part.split_once('=')?;
+            if candidate.trim() != key {
+                return None;
+            }
+            Some(
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .replace("\\\"", "\"")
+                    .to_owned(),
+            )
+        })
+        .next()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -530,5 +580,20 @@ mod tests {
             started.elapsed() < Duration::from_secs(1),
             "status should not wait for the upstream initialize timeout"
         );
+    }
+
+    #[test]
+    fn http_auth_error_includes_www_authenticate_reauth_hint() {
+        let error = http_auth_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            Some(
+                r#"Bearer error="invalid_token", error_description="clear tokens and reconnect", resource_metadata="https://example.test/.well-known/oauth-protected-resource/mcp""#,
+            ),
+            "",
+        );
+
+        assert!(error.contains("auth-missing"));
+        assert!(error.contains("clear tokens and reconnect"));
+        assert!(error.contains("resource_metadata=https://example.test/.well-known"));
     }
 }
